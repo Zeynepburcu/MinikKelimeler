@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         speaker = Speaker(this)
-        val prefs = getSharedPreferences("progress", Context.MODE_PRIVATE)
+        val progress = Progress(getSharedPreferences("progress", Context.MODE_PRIVATE))
 
         setContent {
             MaterialTheme(
@@ -32,11 +33,7 @@ class MainActivity : ComponentActivity() {
                     surface = Color.White
                 )
             ) {
-                App(
-                    speaker = speaker,
-                    initialStars = prefs.getInt("stars", 0),
-                    saveStars = { prefs.edit().putInt("stars", it).apply() }
-                )
+                App(speaker = speaker, progress = progress)
             }
         }
     }
@@ -57,19 +54,20 @@ sealed interface Screen {
     data object Home : Screen
     data object Categories : Screen
     data class Mode(val category: Category) : Screen
-    data class Learn(val category: Category) : Screen
+    /** [round] makes every learn round a fresh screen. */
+    data class Learn(val category: Category, val round: Int) : Screen
     data class Game(val category: Category) : Screen
 }
 
 @Composable
-fun App(speaker: Speaker, initialStars: Int, saveStars: (Int) -> Unit) {
+fun App(speaker: Speaker, progress: Progress) {
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
-    var lang by remember { mutableStateOf(Lang.EN) }
-    var stars by remember { mutableIntStateOf(initialStars) }
+    var learnRound by remember { mutableIntStateOf(0) }
+    val lang = progress.lang
 
-    val addStar = {
-        stars += 1
-        saveStars(stars)
+    fun learn(category: Category) {
+        learnRound += 1
+        screen = Screen.Learn(category, learnRound)
     }
 
     fun goBack() {
@@ -87,17 +85,18 @@ fun App(speaker: Speaker, initialStars: Int, saveStars: (Int) -> Unit) {
 
     when (val s = screen) {
         Screen.Home -> HomeScreen(
-            stars = stars,
-            onLanguage = { chosen ->
-                lang = chosen
-                speaker.speak(if (chosen == Lang.EN) "Hello!" else "Hallo!", chosen)
+            lang = lang,
+            stars = progress.stars,
+            onStart = {
+                speaker.speak(Words.hello(lang), lang)
                 screen = Screen.Categories
-            }
+            },
+            onLanguage = { progress.lang = it }
         )
 
         Screen.Categories -> CategoriesScreen(
             lang = lang,
-            stars = stars,
+            progress = progress,
             missingVoice = speaker.missingVoice,
             onBack = { goBack() },
             onCategory = { category ->
@@ -109,26 +108,30 @@ fun App(speaker: Speaker, initialStars: Int, saveStars: (Int) -> Unit) {
         is Screen.Mode -> ModeScreen(
             lang = lang,
             category = s.category,
-            stars = stars,
+            progress = progress,
             onBack = { goBack() },
-            onLearn = { screen = Screen.Learn(s.category) },
+            onLearn = { learn(s.category) },
             onPlay = { screen = Screen.Game(s.category) }
         )
 
-        is Screen.Learn -> LearnScreen(
-            lang = lang,
-            category = s.category,
-            speaker = speaker,
-            onBack = { goBack() },
-            onPlay = { screen = Screen.Game(s.category) }
-        )
+        is Screen.Learn -> key(s.round) {
+            LearnScreen(
+                lang = lang,
+                category = s.category,
+                speaker = speaker,
+                progress = progress,
+                onBack = { goBack() },
+                onAgain = { learn(s.category) },
+                onPlay = { screen = Screen.Game(s.category) }
+            )
+        }
 
         is Screen.Game -> GameScreen(
             lang = lang,
             category = s.category,
             speaker = speaker,
-            stars = stars,
-            onStar = addStar,
+            progress = progress,
+            onLearnMore = { learn(s.category) },
             onBack = { goBack() }
         )
     }

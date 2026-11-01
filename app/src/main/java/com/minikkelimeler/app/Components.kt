@@ -131,7 +131,8 @@ fun PictureCard(
     color: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    imageSize: Dp = 96.dp
+    imageSize: Dp = 96.dp,
+    badge: String? = null
 ) {
     androidx.compose.foundation.layout.Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -146,5 +147,14 @@ fun PictureCard(
         Emoji(image, Modifier.size(imageSize))
         Spacer(Modifier.height(8.dp))
         Text(caption, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFF3E2723))
+        if (badge != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                badge,
+                fontSize = 14.sp,
+                color = Color(0xFF6D4C41),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
     }
 }

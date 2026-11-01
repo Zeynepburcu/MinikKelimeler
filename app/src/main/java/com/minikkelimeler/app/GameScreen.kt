@@ -45,36 +45,46 @@ import kotlinx.coroutines.launch
 
 private const val ROUNDS = 8
 
-private data class Round(val target: Word, val options: List<Word>)
+/** One question: the word to find, the three pictures and the sentence that is spoken. */
+private data class Round(val target: Word, val options: List<Word>, val question: String)
 
-/** Builds the rounds: each target word appears once, with two other pictures. */
-private fun makeRounds(words: List<Word>): List<Round> =
-    words.shuffled().take(ROUNDS).map { target ->
-        val others = (words - target).shuffled().take(2)
-        Round(target, (others + target).shuffled())
+/**
+ * Builds the rounds from the words the child has already learned.
+ * Each word is asked once; half of the questions are simple ("Where is the
+ * helicopter?"), the other half are little sentences ("Let's take the helicopter!").
+ */
+private fun makeRounds(category: Category, learned: List<Word>, lang: Lang): List<Round> =
+    learned.shuffled().take(ROUNDS).mapIndexed { i, target ->
+        val others = (learned - target).shuffled().take(2)
+        val question = if (i % 2 == 0) category.ask(target, lang) else category.sentence(target, lang)
+        Round(target, (others + target).shuffled(), question)
     }
 
 /**
- * "Where is the dog?" The app asks out loud and the child taps the right picture
- * out of three. A star is earned for every round.
+ * The game: the app says a question or a sentence out loud and the child taps
+ * the matching picture out of three. Only learned words are used.
+ * A star is earned for every round.
  */
 @Composable
 fun GameScreen(
     lang: Lang,
     category: Category,
     speaker: Speaker,
-    stars: Int,
-    onStar: () -> Unit,
+    progress: Progress,
+    onLearnMore: () -> Unit,
     onBack: () -> Unit
 ) {
-    var rounds by remember { mutableStateOf(makeRounds(category.words)) }
+    var rounds by remember {
+        mutableStateOf(makeRounds(category, progress.learnedWords(lang, category), lang))
+    }
     var roundIndex by remember { mutableIntStateOf(0) }
 
     // Ask the question at the start of every round; cheer at the end.
     LaunchedEffect(roundIndex, rounds) {
+        if (rounds.isEmpty()) return@LaunchedEffect
         if (roundIndex < rounds.size) {
             delay(400)
-            speaker.speak(rounds[roundIndex].target.question(lang), lang)
+            speaker.speak(rounds[roundIndex].question, lang)
         } else {
             speaker.speak(Words.finished(lang), lang)
         }
@@ -86,25 +96,41 @@ fun GameScreen(
             .fillMaxSize()
             .background(category.color)
     ) {
-        TopBar(onBack = onBack, stars = stars)
+        TopBar(onBack = onBack, stars = progress.stars)
 
-        if (roundIndex >= rounds.size) {
-            FinishedView(
+        when {
+            // Safety net: not enough learned words yet (should not happen, the button is locked).
+            rounds.size < Progress.MIN_TO_PLAY || rounds.first().options.size < 3 -> {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxSize().padding(24.dp)
+                ) {
+                    Emoji(R.drawable.ui_lock, Modifier.size(120.dp))
+                    Spacer(Modifier.height(24.dp))
+                    RoundButton(R.drawable.ui_learn, onClick = onLearnMore, size = 112.dp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(Texts.learnFirst, fontSize = 20.sp, color = Color(0xFF3E2723))
+                }
+            }
+
+            roundIndex >= rounds.size -> FinishedView(
                 earned = rounds.size,
                 onAgain = {
-                    rounds = makeRounds(category.words)
+                    rounds = makeRounds(category, progress.learnedWords(lang, category), lang)
                     roundIndex = 0
                 },
+                onLearnMore = onLearnMore,
                 onBack = onBack
             )
-        } else {
-            RoundView(
+
+            else -> RoundView(
                 lang = lang,
                 speaker = speaker,
                 round = rounds[roundIndex],
                 roundIndex = roundIndex,
                 roundCount = rounds.size,
-                onStar = onStar,
+                onStar = { progress.addStar() },
                 onNext = { roundIndex += 1 }
             )
         }
@@ -144,12 +170,12 @@ private fun ColumnScope.RoundView(
     ) {
         RoundButton(
             R.drawable.ui_speaker,
-            onClick = { speaker.speak(round.target.question(lang), lang) },
+            onClick = { speaker.speak(round.question, lang) },
             size = 72.dp
         )
         Spacer(Modifier.width(16.dp))
         Text(
-            round.target.question(lang),
+            round.question,
             fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF3E2723)
@@ -203,7 +229,7 @@ private fun ColumnScope.RoundView(
                         } else {
                             wrong = wrong + i
                             speaker.speak(
-                                Words.tryAgain(lang) + " " + round.target.question(lang),
+                                Words.tryAgain(lang) + " " + round.question,
                                 lang
                             )
                             shakingIndex = i
@@ -222,7 +248,12 @@ private fun ColumnScope.RoundView(
 }
 
 @Composable
-private fun FinishedView(earned: Int, onAgain: () -> Unit, onBack: () -> Unit) {
+private fun FinishedView(
+    earned: Int,
+    onAgain: () -> Unit,
+    onLearnMore: () -> Unit,
+    onBack: () -> Unit
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -244,14 +275,20 @@ private fun FinishedView(earned: Int, onAgain: () -> Unit, onBack: () -> Unit) {
         Spacer(Modifier.height(40.dp))
         Row(
             verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(40.dp)
+            horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                RoundButton(R.drawable.ui_play, onClick = onAgain, size = 96.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(Texts.again, fontSize = 20.sp, color = Color(0xFF3E2723))
-            }
-            RoundButton(R.drawable.ui_back, onClick = onBack, size = 96.dp)
+            LabeledButton(R.drawable.ui_play, Texts.again, onAgain)
+            LabeledButton(R.drawable.ui_learn, Texts.newWords, onLearnMore)
+            LabeledButton(R.drawable.ui_back, "", onBack)
         }
+    }
+}
+
+@Composable
+private fun LabeledButton(image: Int, label: String, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        RoundButton(image, onClick = onClick, size = 88.dp)
+        Spacer(Modifier.height(8.dp))
+        Text(label, fontSize = 18.sp, color = Color(0xFF3E2723))
     }
 }
